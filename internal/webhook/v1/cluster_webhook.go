@@ -220,6 +220,7 @@ func (v *ClusterCustomValidator) validate(r *apiv1.Cluster) (allErrs field.Error
 		v.validatePromotionToken,
 		v.validatePluginConfiguration,
 		v.validateLivenessPingerProbe,
+		v.validateExtensions,
 	}
 
 	for _, validate := range validations {
@@ -2446,7 +2447,58 @@ func (v *ClusterCustomValidator) getAdmissionWarnings(r *apiv1.Cluster) admissio
 	list := getMaintenanceWindowsAdmissionWarnings(r)
 	list = append(list, getInTreeBarmanWarnings(r)...)
 	list = append(list, getRetentionPolicyWarnings(r)...)
+	list = append(list, getStorageWarnings(r)...)
 	return append(list, getSharedBuffersWarnings(r)...)
+}
+
+func getStorageWarnings(r *apiv1.Cluster) admission.Warnings {
+	generateWarningsFunc := func(path field.Path, configuration *apiv1.StorageConfiguration) admission.Warnings {
+		if configuration == nil {
+			return nil
+		}
+
+		if configuration.PersistentVolumeClaimTemplate == nil {
+			return nil
+		}
+
+		pvcTemplatePath := path.Child("pvcTemplate")
+
+		var result admission.Warnings
+		if configuration.StorageClass != nil && configuration.PersistentVolumeClaimTemplate.StorageClassName != nil {
+			storageClass := path.Child("storageClass").String()
+			result = append(
+				result,
+				fmt.Sprintf("%s and %s are both specified, %s value will be used.",
+					storageClass,
+					pvcTemplatePath.Child("storageClassName"),
+					storageClass,
+				),
+			)
+		}
+		requestsSpecified := !configuration.PersistentVolumeClaimTemplate.Resources.Requests.Storage().IsZero()
+		if configuration.Size != "" && requestsSpecified {
+			size := path.Child("size").String()
+			result = append(
+				result,
+				fmt.Sprintf(
+					"%s and %s are both specified, %s value will be used.",
+					size,
+					pvcTemplatePath.Child("resources", "requests", "storage").String(),
+					size,
+				),
+			)
+		}
+
+		return result
+	}
+
+	var result admission.Warnings
+
+	storagePath := *field.NewPath("spec", "storage")
+	result = append(result, generateWarningsFunc(storagePath, &r.Spec.StorageConfiguration)...)
+
+	walStoragePath := *field.NewPath("spec", "walStorage")
+	return append(result, generateWarningsFunc(walStoragePath, r.Spec.WalStorage)...)
 }
 
 func getInTreeBarmanWarnings(r *apiv1.Cluster) admission.Warnings {
@@ -2629,4 +2681,68 @@ func (v *ClusterCustomValidator) validateLivenessPingerProbe(r *apiv1.Cluster) f
 	}
 
 	return nil
+}
+
+func (v *ClusterCustomValidator) validateExtensions(r *apiv1.Cluster) field.ErrorList {
+	ensureNotEmptyOrDuplicate := func(path *field.Path, list *stringset.Data, value string) *field.Error {
+		if value == "" {
+			return field.Invalid(
+				path,
+				value,
+				"value cannot be empty",
+			)
+		}
+
+		if list.Has(value) {
+			return field.Duplicate(
+				path,
+				value,
+			)
+		}
+		return nil
+	}
+
+	if len(r.Spec.PostgresConfiguration.Extensions) == 0 {
+		return nil
+	}
+
+	var result field.ErrorList
+
+	extensionNames := stringset.New()
+
+	for i, v := range r.Spec.PostgresConfiguration.Extensions {
+		basePath := field.NewPath("spec", "postgresql", "extensions").Index(i)
+		if nameErr := ensureNotEmptyOrDuplicate(basePath.Child("name"), extensionNames, v.Name); nameErr != nil {
+			result = append(result, nameErr)
+		}
+		extensionNames.Put(v.Name)
+
+		controlPaths := stringset.New()
+		for j, path := range v.ExtensionControlPath {
+			if validateErr := ensureNotEmptyOrDuplicate(
+				basePath.Child("extension_control_path").Index(j),
+				controlPaths,
+				path,
+			); validateErr != nil {
+				result = append(result, validateErr)
+			}
+
+			controlPaths.Put(path)
+		}
+
+		libraryPaths := stringset.New()
+		for j, path := range v.DynamicLibraryPath {
+			if validateErr := ensureNotEmptyOrDuplicate(
+				basePath.Child("dynamic_library_path").Index(j),
+				libraryPaths,
+				path,
+			); validateErr != nil {
+				result = append(result, validateErr)
+			}
+
+			libraryPaths.Put(path)
+		}
+	}
+
+	return result
 }
