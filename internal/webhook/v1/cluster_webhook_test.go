@@ -5258,7 +5258,7 @@ var _ = Describe("validatePluginConfiguration", func() {
 	})
 })
 
-var _ = Describe("", func() {
+var _ = Describe("liveness probe validation", func() {
 	var v *ClusterCustomValidator
 	BeforeEach(func() {
 		v = &ClusterCustomValidator{}
@@ -5295,6 +5295,230 @@ var _ = Describe("", func() {
 		errs := v.validateLivenessPingerProbe(cluster)
 		Expect(errs).To(HaveLen(1))
 		Expect(errs[0].Error()).To(ContainSubstring("error decoding liveness pinger config"))
+	})
+})
+
+var _ = Describe("validateExtensions", func() {
+	var v *ClusterCustomValidator
+	BeforeEach(func() {
+		v = &ClusterCustomValidator{}
+	})
+
+	It("returns no error when extensions are not specified", func() {
+		cluster := &apiv1.Cluster{}
+		Expect(v.validateExtensions(cluster)).To(BeEmpty())
+	})
+
+	It("returns no error if the specified extensions are unique", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+						},
+						{
+							Name: "extTwo",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		Expect(v.validateExtensions(cluster)).To(BeEmpty())
+	})
+
+	It("returns an error per duplicate extension name", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+						},
+						{
+							Name: "extTwo",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+						},
+						{
+							Name: "extTwo",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extTwo:1",
+							},
+						},
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne:1",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := v.validateExtensions(cluster)
+		Expect(err).To(HaveLen(2))
+		Expect(err[0].BadValue).To(Equal("extTwo"))
+		Expect(err[1].BadValue).To(Equal("extOne"))
+	})
+
+	It("returns multiple errors for both invalid ExtensionControlPath and DynamicLibraryPath", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+							ExtensionControlPath: []string{
+								"/valid/path",
+								"",
+							},
+							DynamicLibraryPath: []string{
+								"",
+								"/valid/lib/path",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := v.validateExtensions(cluster)
+		Expect(err).To(HaveLen(2))
+		Expect(err[0].Field).To(ContainSubstring("extensions[0].extension_control_path[1]"))
+		Expect(err[1].Field).To(ContainSubstring("extensions[0].dynamic_library_path[0]"))
+	})
+
+	It("returns no error when ExtensionControlPath and DynamicLibraryPath are valid", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+							ExtensionControlPath: []string{
+								"/usr/share/postgresql/extension",
+								"/opt/custom/extensions",
+							},
+							DynamicLibraryPath: []string{
+								"/usr/lib/postgresql/lib",
+								"/opt/custom/lib",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		Expect(v.validateExtensions(cluster)).To(BeEmpty())
+	})
+
+	It("returns errors for duplicate ExtensionControlPath entries", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+							ExtensionControlPath: []string{
+								"/usr/share/postgresql/extension",
+								"/opt/custom/extensions",
+								"/usr/share/postgresql/extension", // duplicate
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := v.validateExtensions(cluster)
+		Expect(err).To(HaveLen(1))
+		Expect(err[0].Type).To(Equal(field.ErrorTypeDuplicate))
+		Expect(err[0].Field).To(ContainSubstring("extensions[0].extension_control_path[2]"))
+		Expect(err[0].BadValue).To(Equal("/usr/share/postgresql/extension"))
+	})
+
+	It("returns errors for duplicate DynamicLibraryPath entries", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+							DynamicLibraryPath: []string{
+								"/usr/lib/postgresql/lib",
+								"/opt/custom/lib",
+								"/usr/lib/postgresql/lib",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := v.validateExtensions(cluster)
+		Expect(err).To(HaveLen(1))
+		Expect(err[0].Type).To(Equal(field.ErrorTypeDuplicate))
+		Expect(err[0].Field).To(ContainSubstring("extensions[0].dynamic_library_path[2]"))
+		Expect(err[0].BadValue).To(Equal("/usr/lib/postgresql/lib"))
+	})
+
+	It("returns errors for duplicates in both ExtensionControlPath and DynamicLibraryPath", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Extensions: []apiv1.ExtensionConfiguration{
+						{
+							Name: "extOne",
+							ImageVolumeSource: corev1.ImageVolumeSource{
+								Reference: "extOne",
+							},
+							ExtensionControlPath: []string{
+								"/usr/share/postgresql/extension",
+								"/usr/share/postgresql/extension",
+							},
+							DynamicLibraryPath: []string{
+								"/usr/lib/postgresql/lib",
+								"/usr/lib/postgresql/lib",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := v.validateExtensions(cluster)
+		Expect(err).To(HaveLen(2))
+
+		Expect(err[0].Type).To(Equal(field.ErrorTypeDuplicate))
+		Expect(err[0].BadValue).To(Equal("/usr/share/postgresql/extension"))
+
+		Expect(err[1].Type).To(Equal(field.ErrorTypeDuplicate))
+		Expect(err[1].BadValue).To(Equal("/usr/lib/postgresql/lib"))
 	})
 })
 
@@ -5381,5 +5605,270 @@ var _ = Describe("getRetentionPolicyWarnings", func() {
 
 		warnings := getRetentionPolicyWarnings(cluster)
 		Expect(warnings).To(HaveLen(1))
+	})
+})
+
+var _ = Describe("getStorageWarnings", func() {
+	It("returns no warnings when storage is properly configured", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size: "1Gi",
+				},
+			},
+		}
+		Expect(getStorageWarnings(cluster)).To(BeEmpty())
+	})
+
+	It("returns no warnings when PVC template has storage configured", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+		Expect(getStorageWarnings(cluster)).To(BeEmpty())
+	})
+
+	It("returns a warning when both storageClass and storageClassName are specified", func() {
+		storageClass := "fast-ssd"
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					StorageClass: &storageClass,
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						StorageClassName: &storageClass,
+					},
+				},
+			},
+		}
+		warnings := getStorageWarnings(cluster)
+		Expect(warnings).To(HaveLen(1))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.storageClass"))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.pvcTemplate.storageClassName"))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.storageClass value will be used"))
+	})
+
+	It("returns a warning when both size and storage requests are specified", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size: "1Gi",
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("2Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+		warnings := getStorageWarnings(cluster)
+		Expect(warnings).To(HaveLen(1))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.size"))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.pvcTemplate.resources.requests.storage"))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage.size value will be used"))
+	})
+
+	It("returns multiple warnings when both storage conflicts exist", func() {
+		storageClass := "fast-ssd"
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size:         "1Gi",
+					StorageClass: &storageClass,
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						StorageClassName: &storageClass,
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("2Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+		warnings := getStorageWarnings(cluster)
+		Expect(warnings).To(HaveLen(2))
+		Expect(warnings[0]).To(ContainSubstring("storageClass"))
+		Expect(warnings[1]).To(ContainSubstring("size"))
+	})
+
+	It("returns warnings for WAL storage configuration conflicts", func() {
+		storageClass := "fast-ssd"
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				WalStorage: &apiv1.StorageConfiguration{
+					Size:         "500Mi",
+					StorageClass: &storageClass,
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						StorageClassName: &storageClass,
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+		warnings := getStorageWarnings(cluster)
+		Expect(warnings).To(HaveLen(2))
+		Expect(warnings[0]).To(ContainSubstring("spec.walStorage.storageClass"))
+		Expect(warnings[1]).To(ContainSubstring("spec.walStorage.size"))
+	})
+
+	It("returns warnings for both storage and WAL storage conflicts", func() {
+		storageClass := "fast-ssd"
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size:         "1Gi",
+					StorageClass: &storageClass,
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						StorageClassName: &storageClass,
+					},
+				},
+				WalStorage: &apiv1.StorageConfiguration{
+					Size: "500Mi",
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+						},
+					},
+				},
+			},
+		}
+		warnings := getStorageWarnings(cluster)
+		Expect(warnings).To(HaveLen(2))
+		Expect(warnings[0]).To(ContainSubstring("spec.storage"))
+		Expect(warnings[1]).To(ContainSubstring("spec.walStorage"))
+	})
+
+	It("returns no warnings when WAL storage is nil", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size: "1Gi",
+				},
+				WalStorage: nil,
+			},
+		}
+		Expect(getStorageWarnings(cluster)).To(BeEmpty())
+	})
+
+	It("returns no warnings when PVC template is nil", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size:                          "1Gi",
+					PersistentVolumeClaimTemplate: nil,
+				},
+			},
+		}
+		Expect(getStorageWarnings(cluster)).To(BeEmpty())
+	})
+
+	It("returns no warnings when storage requests are zero", func() {
+		cluster := &apiv1.Cluster{
+			Spec: apiv1.ClusterSpec{
+				StorageConfiguration: apiv1.StorageConfiguration{
+					Size: "1Gi",
+					PersistentVolumeClaimTemplate: &corev1.PersistentVolumeClaimSpec{
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{},
+						},
+					},
+				},
+			},
+		}
+		Expect(getStorageWarnings(cluster)).To(BeEmpty())
+	})
+})
+
+var _ = Describe("failoverQuorum validation", func() {
+	var v *ClusterCustomValidator
+	BeforeEach(func() {
+		v = &ClusterCustomValidator{}
+	})
+
+	It("fails if it is active but no synchronous replication is configured", func() {
+		cluster := &apiv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					utils.FailoverQuorumAnnotationName: "t",
+				},
+			},
+			Spec: apiv1.ClusterSpec{
+				Instances: 3,
+			},
+		}
+
+		errList := v.validateFailoverQuorum(cluster)
+		Expect(errList).To(HaveLen(1))
+	})
+
+	It("requires at least three instances", func() {
+		cluster := &apiv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					utils.FailoverQuorumAnnotationName: "t",
+				},
+			},
+			Spec: apiv1.ClusterSpec{
+				Instances: 3,
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Synchronous: &apiv1.SynchronousReplicaConfiguration{
+						Number: 1,
+					},
+				},
+			},
+		}
+
+		errList := v.validateFailoverQuorum(cluster)
+		Expect(errList).To(BeEmpty())
+
+		cluster.Spec.Instances = 2
+		errList = v.validateFailoverQuorum(cluster)
+		Expect(errList).To(HaveLen(1))
+	})
+
+	It("check if the number of external synchronous replicas is coherent", func() {
+		cluster := &apiv1.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					utils.FailoverQuorumAnnotationName: "t",
+				},
+			},
+			Spec: apiv1.ClusterSpec{
+				Instances: 3,
+				PostgresConfiguration: apiv1.PostgresConfiguration{
+					Synchronous: &apiv1.SynchronousReplicaConfiguration{
+						Number: 1,
+						StandbyNamesPre: []string{
+							"one",
+							"two",
+						},
+						StandbyNamesPost: []string{
+							"three",
+							"four",
+						},
+					},
+				},
+			},
+		}
+
+		errList := v.validateFailoverQuorum(cluster)
+		Expect(errList).To(HaveLen(1))
 	})
 })

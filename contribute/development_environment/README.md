@@ -34,7 +34,6 @@ make help
 Normally, the next step after this is to [clone the CloudNativePG repository](#forking-the-repository)
 on your local workstation.
 
-<!-- TODO: We should add an easier way to check that requirements are met -->
 
 ### GNU/Linux systems
 
@@ -47,6 +46,7 @@ environment variable:
 - [golangci-lint](https://github.com/golangci/golangci-lint)
 - [goreleaser](https://goreleaser.com/)
 - [Operator SDK CLI](https://sdk.operatorframework.io/)
+- [Helm](https://helm.sh/)
 
 In addition, check that the following packages are installed in your system:
 
@@ -83,7 +83,8 @@ components in your Mac OS X system:
 brew install go \
   kind \
   golangci/tap/golangci-lint \
-  goreleaser
+  goreleaser \
+  helm
 ```
 
 Please note that bash v5.0+ is required, this can be installed with:

@@ -57,7 +57,7 @@ KUSTOMIZE_VERSION ?= v5.6.0
 CONTROLLER_TOOLS_VERSION ?= v0.18.0
 GENREF_VERSION ?= 015aaac611407c4fe591bc8700d2c67b7521efca
 # renovate: datasource=go depName=github.com/goreleaser/goreleaser
-GORELEASER_VERSION ?= v2.11.0
+GORELEASER_VERSION ?= v2.11.2
 # renovate: datasource=docker depName=jonasbn/github-action-spellcheck versioning=docker
 SPELLCHECK_VERSION ?= 0.51.0
 # renovate: datasource=docker depName=getwoke/woke versioning=docker
@@ -108,6 +108,11 @@ all: build
 
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+.PHONY: check-requirements
+
+check-requirements:## Verify local development prerequisites
+	hack/check-requirements.sh
 
 ##@ Development
 

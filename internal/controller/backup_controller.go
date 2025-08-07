@@ -181,6 +181,7 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}()
 
 	ctx = cnpgiClient.SetPluginClientInContext(ctx, pluginClient)
+	ctx = cluster.SetInContext(ctx)
 
 	// Plugin pre-hooks
 	if hookResult := preReconcilePluginHooks(ctx, &cluster, &backup); hookResult.StopReconciliation {
@@ -380,7 +381,7 @@ func (r *BackupReconciler) isValidBackupRunning(
 		contextLogger.Info("Backup is already running on",
 			"cluster", cluster.Name,
 			"pod", pod.Name,
-			"started at", backup.Status.StartedAt)
+			"startedAt", backup.Status.StartedAt)
 
 		// Nothing to do here
 		return true, nil
