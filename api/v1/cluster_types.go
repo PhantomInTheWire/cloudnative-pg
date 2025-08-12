@@ -112,6 +112,11 @@ const (
 	// MissingWALDiskSpaceExitCode is the exit code the instance manager
 	// will use to signal that there's no more WAL disk space
 	MissingWALDiskSpaceExitCode = 4
+
+	// MissingWALArchivePlugin is the exit code used by the instance manager
+	// to indicate that it started successfully, but the configured WAL
+	// archiving plugin is not available.
+	MissingWALArchivePlugin = 5
 )
 
 // SnapshotOwnerReference defines the reference type for the owner of the snapshot.
@@ -1429,6 +1434,37 @@ type PostgresConfiguration struct {
 	// Defaults to false.
 	// +optional
 	EnableAlterSystem bool `json:"enableAlterSystem,omitempty"`
+
+	// The configuration of the extensions to be added
+	// +optional
+	Extensions []ExtensionConfiguration `json:"extensions,omitempty"`
+}
+
+// ExtensionConfiguration is the configuration used to add
+// PostgreSQL extensions to the Cluster.
+type ExtensionConfiguration struct {
+	// The name of the extension, required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// The image containing the extension, required
+	// +kubebuilder:validation:XValidation:rule="has(self.reference)",message="An image reference is required"
+	ImageVolumeSource corev1.ImageVolumeSource `json:"image"`
+
+	// The list of directories inside the image which should be added to extension_control_path.
+	// If not defined, defaults to "/share".
+	// +optional
+	ExtensionControlPath []string `json:"extension_control_path,omitempty"`
+
+	// The list of directories inside the image which should be added to dynamic_library_path.
+	// If not defined, defaults to "/lib".
+	// +optional
+	DynamicLibraryPath []string `json:"dynamic_library_path,omitempty"`
+
+	// The list of directories inside the image which should be added to ld_library_path.
+	// +optional
+	LdLibraryPath []string `json:"ld_library_path,omitempty"`
 }
 
 // BootstrapConfiguration contains information about how to create the PostgreSQL

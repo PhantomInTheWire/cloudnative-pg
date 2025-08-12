@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -38,6 +39,7 @@ import (
 	"time"
 
 	"github.com/blang/semver"
+	"github.com/cloudnative-pg/machinery/pkg/envmap"
 	"github.com/cloudnative-pg/machinery/pkg/execlog"
 	"github.com/cloudnative-pg/machinery/pkg/fileutils"
 	"github.com/cloudnative-pg/machinery/pkg/fileutils/compatibility"
@@ -223,6 +225,9 @@ type Instance struct {
 	MetricsPortTLS bool
 
 	serverCertificateHandler serverCertificateHandler
+
+	// Cluster is the cluster this instance belongs to
+	Cluster *apiv1.Cluster
 }
 
 type serverCertificateHandler struct {
@@ -723,16 +728,56 @@ func (instance *Instance) Run() (*execlog.StreamingCmd, error) {
 	return streamingCmd, nil
 }
 
+// buildPostgresEnv builds the environment variables that should be used by PostgreSQL
+// to run the main process, taking care of adding any library path that is needed for
+// extensions.
 func (instance *Instance) buildPostgresEnv() []string {
 	env := instance.Env
 	if env == nil {
 		env = os.Environ()
 	}
-	env = append(env,
-		"PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj",
-		"PG_OOM_ADJUST_VALUE=0",
-	)
-	return env
+	envMap, _ := envmap.Parse(env)
+	envMap["PG_OOM_ADJUST_FILE"] = "/proc/self/oom_score_adj"
+	envMap["PG_OOM_ADJUST_VALUE"] = "0"
+
+	if instance.Cluster == nil {
+		return envMap.StringSlice()
+	}
+
+	// If there are no additional library paths, we use the environment variables
+	// of the current process
+	additionalLibraryPaths := collectLibraryPaths(instance.Cluster.Spec.PostgresConfiguration.Extensions)
+	if len(additionalLibraryPaths) == 0 {
+		return envMap.StringSlice()
+	}
+
+	// We add the additional library paths after the entries that are already
+	// available.
+	currentLibraryPath := envMap["LD_LIBRARY_PATH"]
+	if currentLibraryPath != "" {
+		currentLibraryPath += ":"
+	}
+	currentLibraryPath += strings.Join(additionalLibraryPaths, ":")
+	envMap["LD_LIBRARY_PATH"] = currentLibraryPath
+
+	return envMap.StringSlice()
+}
+
+// collectLibraryPaths returns a list of PATHS which should be added to LD_LIBRARY_PATH
+// given an extension
+func collectLibraryPaths(extensionList []apiv1.ExtensionConfiguration) []string {
+	result := make([]string, 0, len(extensionList))
+
+	for _, extension := range extensionList {
+		for _, libraryPath := range extension.LdLibraryPath {
+			result = append(
+				result,
+				filepath.Join(postgres.ExtensionsBaseDirectory, extension.Name, libraryPath),
+			)
+		}
+	}
+
+	return result
 }
 
 // WithActiveInstance execute the internal function while this
@@ -964,6 +1009,37 @@ func (instance *Instance) WaitForConfigReload(ctx context.Context) (*postgres.Po
 	}
 
 	return status, nil
+}
+
+// GetSynchronousReplicationMetadata reads the current PostgreSQL configuration
+// and extracts the parameters that were used to compute the synchronous_standby_names
+// GUC.
+func (instance *Instance) GetSynchronousReplicationMetadata(
+	ctx context.Context,
+) (*postgres.SynchronousStandbyNamesConfig, error) {
+	db, err := instance.GetSuperUserDB()
+	if err != nil {
+		return nil, err
+	}
+
+	var metadata string
+	row := db.QueryRowContext(
+		ctx, fmt.Sprintf("SHOW %s", postgres.CNPGSynchronousStandbyNamesMetadata))
+	err = row.Scan(&metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+
+	var result postgres.SynchronousStandbyNamesConfig
+	if err := json.Unmarshal([]byte(metadata), &result); err != nil {
+		return nil, fmt.Errorf("while decoding synchronous_standby_names metadata: %w", err)
+	}
+
+	return &result, nil
 }
 
 // waitForStreamingConnectionAvailable waits until we can connect to the passed

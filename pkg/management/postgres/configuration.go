@@ -78,10 +78,7 @@ func (instance *Instance) RefreshConfigurationFilesFromCluster(
 	}
 
 	postgresConfiguration, sha256, err := createPostgresqlConfiguration(
-		ctx,
-		cluster,
-		preserveUserSettings,
-		pgMajor,
+		ctx, cluster, preserveUserSettings, pgMajor,
 		operationType,
 	)
 	if err != nil {
@@ -406,7 +403,7 @@ func createPostgresqlConfiguration(
 		IsReplicaCluster:                 cluster.IsReplica(),
 		IsWalArchivingDisabled:           utils.IsWalArchivingDisabled(&cluster.ObjectMeta),
 		IsAlterSystemEnabled:             cluster.Spec.PostgresConfiguration.EnableAlterSystem,
-		SynchronousStandbyNames:          replication.GetSynchronousStandbyNames(cluster),
+		SynchronousStandbyNames:          replication.GetSynchronousStandbyNames(ctx, cluster),
 	}
 
 	if preserveUserSettings {
@@ -425,6 +422,18 @@ func createPostgresqlConfiguration(
 		}
 	}
 	sort.Strings(info.TemporaryTablespaces)
+
+	// Set additional extensions
+	for _, extension := range cluster.Spec.PostgresConfiguration.Extensions {
+		info.AdditionalExtensions = append(
+			info.AdditionalExtensions,
+			postgres.AdditionalExtensionConfiguration{
+				Name:                 extension.Name,
+				ExtensionControlPath: extension.ExtensionControlPath,
+				DynamicLibraryPath:   extension.DynamicLibraryPath,
+			},
+		)
+	}
 
 	// Setup minimum replay delay if we're on a replica cluster
 	if cluster.IsReplica() && cluster.Spec.ReplicaCluster.MinApplyDelay != nil {
